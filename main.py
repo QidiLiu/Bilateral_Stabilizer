@@ -47,10 +47,20 @@ def compareImages(last_gray_image, gray_image):
     abs_y_grad = cv2.convertScaleAbs(y_grad)
     grad = cv2.addWeighted(abs_x_grad, 0.5, abs_y_grad, 0.5, 0)
     best_vectors = np.zeros([GRID_M, GRID_N, 3], np.float64)
-    #shifts_num = (1 + 2*MAX_SHIFT) ** 2
-    #pixels_num = (1 + 2*HALF_SLIDING_WINDOW_SIZE) ** 2
+    shifts_num = (1 + 2*MAX_SHIFT) ** 2
     crop_roi_size = 1 + 2*HALF_SLIDING_WINDOW_SIZE
-    #shifted_rois = np.zeros([GRID_M, GRID_N, shifts_num, pixels_num], np.float64)
+    shifted_rois = np.zeros(
+        [GRID_M*crop_roi_size, GRID_N*crop_roi_size, shifts_num],
+        np.uint8
+    )
+    broadcasted_comparing_rois = np.zeros(
+        [GRID_M*crop_roi_size, GRID_N*crop_roi_size, shifts_num],
+        np.uint8
+    )
+    comparing_rois = np.zeros(
+        [GRID_M*crop_roi_size, GRID_N*crop_roi_size],
+        np.uint8
+    )
     padding_size = HALF_SLIDING_WINDOW_SIZE + MAX_SHIFT
     padded_gray_image = cv2.copyMakeBorder(
         gray_image,
@@ -69,42 +79,51 @@ def compareImages(last_gray_image, gray_image):
         cv2.BORDER_REPLICATE
     )
 
-    for i in range(GRID_M):
-        for j in range(GRID_N):
-            y_1 = i * GRID_HEIGHT
-            y_2 = (i+1) * GRID_HEIGHT
-            x_1 = j * GRID_WIDTH
-            x_2 = (j+1) * GRID_WIDTH
-            roi = grad[y_1:y_2, x_1:x_2]
-            grid_max_position = np.unravel_index(np.argmax(roi), roi.shape) # format: (y, x)
-            grid_y_0 = padding_size + i*GRID_WIDTH
-            grid_x_0 = padding_size + j*GRID_WIDTH
-            reference_y = grid_y_0 + grid_max_position[0] - HALF_SLIDING_WINDOW_SIZE
-            reference_x = grid_x_0 + grid_max_position[1] - HALF_SLIDING_WINDOW_SIZE
-            last_gray_image_roi = padded_last_gray_image[
-                reference_y : reference_y + crop_roi_size,
-                reference_x : reference_x + crop_roi_size,
-            ]
-            shift_reference_y = reference_y - MAX_SHIFT
-            shift_reference_x = reference_x - MAX_SHIFT
-
-            shift_count = 0
-            min_diff = np.inf
-            for shift_i in range(1 + 2*MAX_SHIFT):
-                for shift_j in range(1 + 2*MAX_SHIFT):
+    shift_count = 0
+    for shift_i in range(1 + 2*MAX_SHIFT):
+        for shift_j in range(1 + 2*MAX_SHIFT):
+            for i in range(GRID_M):
+                for j in range(GRID_N):
+                    y_1 = i * GRID_HEIGHT
+                    y_2 = (i+1) * GRID_HEIGHT
+                    x_1 = j * GRID_WIDTH
+                    x_2 = (j+1) * GRID_WIDTH
+                    roi = grad[y_1:y_2, x_1:x_2]
+                    grid_max_position = np.unravel_index(np.argmax(roi), roi.shape) # format: (y, x)
+                    grid_y_0 = padding_size + i*GRID_WIDTH
+                    grid_x_0 = padding_size + j*GRID_WIDTH
+                    reference_y = grid_y_0 + grid_max_position[0] - HALF_SLIDING_WINDOW_SIZE
+                    reference_x = grid_x_0 + grid_max_position[1] - HALF_SLIDING_WINDOW_SIZE
+                    crop_y_1 = i*crop_roi_size
+                    crop_y_2 = (i+1)*crop_roi_size
+                    crop_x_1 = j*crop_roi_size
+                    crop_x_2 = (j+1)*crop_roi_size
+                    if (shift_i == 0 and shift_j == 0):
+                        comparing_rois[crop_y_1:crop_y_2, crop_x_1:crop_x_2] = padded_last_gray_image[
+                            reference_y : reference_y + crop_roi_size,
+                            reference_x : reference_x + crop_roi_size
+                        ]
+                        #opencv_debug(comparing_rois)
+                    shift_reference_y = reference_y - MAX_SHIFT
+                    shift_reference_x = reference_x - MAX_SHIFT
                     shift_y_1 = shift_reference_y + shift_i
                     shift_y_2 = shift_reference_y + shift_i + crop_roi_size
                     shift_x_1 = shift_reference_x + shift_j
                     shift_x_2 = shift_reference_x + shift_j + crop_roi_size
-                    crop_roi = padded_gray_image[shift_y_1:shift_y_2, shift_x_1:shift_x_2]
-                    roi_abs_diff = np.sum(cv2.absdiff(last_gray_image_roi, crop_roi))
-                    if (roi_abs_diff < min_diff):
-                        min_diff = roi_abs_diff
-                        best_vectors[i, j, 0] = roi_abs_diff
-                        best_vectors[i, j, 1] = shift_j - MAX_SHIFT # shift in x-axis
-                        best_vectors[i, j, 2] = shift_i - MAX_SHIFT # shift in y-axis
-                    #shifted_rois[i, j, shift_count] = np.ravel(crop_roi)
-                    shift_count += 1
+                    shifted_rois[crop_y_1:crop_y_2, crop_x_1:crop_x_2, shift_count] = padded_gray_image[
+                        shift_y_1:shift_y_2,
+                        shift_x_1:shift_x_2
+                    ]
+            shift_count += 1
+    
+    comparing_rois = np.expand_dims(comparing_rois, axis=-1)
+    broadcasted_comparing_rois += comparing_rois
+    roi_abs_diffs = np.sum(cv2.absdiff(broadcasted_comparing_rois, shifted_rois), (0, 1))
+    diffs_image = np.reshape(roi_abs_diffs, [1 + 2*MAX_SHIFT, 1 + 2*MAX_SHIFT])
+    print(diffs_image.shape)
+    print(np.argmin(diffs_image))
+    print(np.min(diffs_image))
+    opencv_debug(diffs_image/100000)
 
     return best_vectors
 
@@ -126,9 +145,6 @@ def main():
             _last_gray_image = _gray_image
             _gray_image = cv2.cvtColor(_image, cv2.COLOR_BGR2GRAY)
             best_vectors = compareImages(_last_gray_image, _gray_image)
-            print(best_vectors)
-    
-            opencv_debug(_image)
 
 
 if __name__ == '__main__':
